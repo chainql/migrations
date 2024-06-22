@@ -37,7 +37,6 @@ const (
 	CockroachDB
 )
 
-
 // Context contains some additional information which may be useful for
 // migration functions.
 type Context struct {
