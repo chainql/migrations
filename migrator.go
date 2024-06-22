@@ -41,16 +41,10 @@ var (
 	ErrInvalidMigrationFuncRun = errors.New("invalid migration function run")
 )
 
-type migration struct {
-	Name string
-	Up   interface{}
-	Down interface{}
-}
-
 const (
 	// DefaultMigrationTableName is the table in which migrations will be
 	// noted if not overridden in the Migrator.
-	DefaultMigrationTableName = "public.hb_migrations"
+	DefaultMigrationTableName = "public.x_migrations"
 
 	// DefaultInitialMigrationName is the name of the migration which will
 	// be run by Init, if not overridden in the Migrator.
@@ -68,7 +62,7 @@ const (
 	// 	package main
 	//
 	// 	import (
-	// 		migrations "github.com/getkalido/hb_migrations/v2"
+	// 		"github.com/padm-io/migrations"
 	// 	)
 	//
 	// 	var (
@@ -82,41 +76,41 @@ const (
 	// 	}
 	DefaultMigrationTemplate = `package main
 
-import (
-	"github.com/go-pg/pg/v10"
-	migrations "github.com/getkalido/hb_migrations/v2"
-)
-
-func init() {
-	err := registry.Register(
-		"{{.Filename}}",
-		up{{.FuncName}},
-		down{{.FuncName}},
+	import (
+		"github.com/go-pg/pg/v10"
+		"github.com/padm-io/migrations"
 	)
-	if err != nil {
-		panic(err)
+	
+	func init() {
+		err := registry.Register(
+			"{{.Filename}}",
+			up{{.FuncName}},
+			down{{.FuncName}},
+		)
+		if err != nil {
+			panic(err)
+		}
 	}
-}
-
-func up{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
-	var err error
-	_, err = tx.Exec(` + "`" + "`" + `)
-	if err != nil {
+	
+	func up{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
+		var err error
+		_, err = tx.Exec(` + "`" + "`" + `)
 		return err
 	}
-	return nil
-}
-
-func down{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
-	var err error
-	_, err = tx.Exec(` + "`" + "`" + `)
-	if err != nil {
+	
+	func down{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
+		var err error
+		_, err = tx.Exec(` + "`" + "`" + `)
 		return err
 	}
-	return nil
-}
-`
+	`
 )
+
+type migration struct {
+	Name string
+	Up   interface{}
+	Down interface{}
+}
 
 // DBFactory returns a DB instance which will house both the migration table
 // (to track completed migrations) and the tables which will be affected by
@@ -128,7 +122,7 @@ type DBFactory func() *pg.DB
 //
 // Should not be considered thread-safe.
 type Migrator struct {
-	dbFactory               func() *pg.DB
+	dbFactory               DBFactory
 	ctx                     context.Context
 	logger                  *log.Logger
 	registry                Registry
@@ -145,12 +139,17 @@ type Migrator struct {
 // DefaultMigrator returns a migrator with the default options.
 func DefaultMigrator() *Migrator {
 	return &Migrator{
-		migrationTableName:      "public.hb_migrations",
-		initialMigration:        "000000000000_init",
-		migrationNameConvention: SnakeCase,
+		migrationTableName:      DefaultMigrationTableName,
+		initialMigration:        DefaultInitialMigrationName,
+		migrationNameConvention: DefaultMigrationNameConvention,
 		explicitLock:            true,
 	}
 }
+
+// MigratorOpt represents an option which can be applied to
+// a migrator during creation. See With*() functions in this
+// package.
+type MigratorOpt func(*Migrator) error
 
 // NewMigrator creates a Migrator with the specified options.
 //
@@ -185,18 +184,13 @@ func NewMigrator(dbFactory DBFactory, opts ...MigratorOpt) (*Migrator, error) {
 	return migrator, nil
 }
 
-// MigratorOpt represents an option which can be applied to
-// a migrator during creation. See With*() functions in this
-// package.
-type MigratorOpt func(*Migrator) error
-
 // WithMigrationTableName sets the name of the table which will
 // store completed migrations for a Migrator.
 //
 // Intended for use with NewMigrator.
-func WithMigrationTableName(name string) MigratorOpt {
-	return func(m *Migrator) error {
-		m.migrationTableName = name
+func WithMigrationTableName(tableName string) MigratorOpt {
+	return func(x *Migrator) error {
+		x.migrationTableName = tableName
 		return nil
 	}
 }
@@ -205,9 +199,9 @@ func WithMigrationTableName(name string) MigratorOpt {
 // will be run by a Migrator when running the init command.
 //
 // Intended for use with NewMigrator.
-func WithInitialName(name string) MigratorOpt {
-	return func(m *Migrator) error {
-		m.initialMigration = name
+func WithInitialName(migrationName string) MigratorOpt {
+	return func(x *Migrator) error {
+		x.initialMigration = migrationName
 		return nil
 	}
 }
@@ -217,8 +211,8 @@ func WithInitialName(name string) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithNameConvention(convention MigrationNameConvention) MigratorOpt {
-	return func(m *Migrator) error {
-		m.migrationNameConvention = convention
+	return func(x *Migrator) error {
+		x.migrationNameConvention = convention
 		return nil
 	}
 }
@@ -229,8 +223,8 @@ func WithNameConvention(convention MigrationNameConvention) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithCapacity(capacity uint) MigratorOpt {
-	return func(m *Migrator) error {
-		m.registry.EnsureCapacity(int(capacity))
+	return func(x *Migrator) error {
+		x.registry.EnsureCapacity(int(capacity))
 		return nil
 	}
 }
@@ -241,8 +235,8 @@ func WithCapacity(capacity uint) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithMigrations(registry *Registry) MigratorOpt {
-	return func(m *Migrator) error {
-		m.registry.From(registry)
+	return func(x *Migrator) error {
+		x.registry.From(registry)
 		return nil
 	}
 }
@@ -253,8 +247,8 @@ func WithMigrations(registry *Registry) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithExplicitLock() MigratorOpt {
-	return func(m *Migrator) error {
-		m.explicitLock = true
+	return func(x *Migrator) error {
+		x.explicitLock = true
 		return nil
 	}
 }
@@ -265,8 +259,8 @@ func WithExplicitLock() MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithoutExplicitLock() MigratorOpt {
-	return func(m *Migrator) error {
-		m.explicitLock = false
+	return func(x *Migrator) error {
+		x.explicitLock = false
 		return nil
 	}
 }
@@ -277,8 +271,8 @@ func WithoutExplicitLock() MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithLogger(logger *log.Logger) MigratorOpt {
-	return func(m *Migrator) error {
-		m.logger = logger
+	return func(x *Migrator) error {
+		x.logger = logger
 		return nil
 	}
 }
@@ -292,15 +286,15 @@ func WithLogger(logger *log.Logger) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithVerbosity(verbosity uint) MigratorOpt {
-	return func(m *Migrator) error {
-		if m.verbosity < 0 {
+	return func(x *Migrator) error {
+		if x.verbosity < 0 {
 			return errors.Wrapf(
 				ErrInvalidVerbosity,
 				"current verbosity %d",
-				m.verbosity,
+				x.verbosity,
 			)
 		}
-		m.verbosity = int(verbosity)
+		x.verbosity = int(verbosity)
 		return nil
 	}
 }
@@ -314,15 +308,15 @@ func WithVerbosity(verbosity uint) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithQuiet(quiet uint) MigratorOpt {
-	return func(m *Migrator) error {
-		if m.verbosity > 0 {
+	return func(x *Migrator) error {
+		if x.verbosity > 0 {
 			return errors.Wrapf(
 				ErrInvalidVerbosity,
 				"current verbosity %d",
-				m.verbosity,
+				x.verbosity,
 			)
 		}
-		m.verbosity = int(quiet)
+		x.verbosity = int(quiet)
 		return nil
 	}
 }
@@ -333,8 +327,8 @@ func WithQuiet(quiet uint) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithContext(ctx context.Context) MigratorOpt {
-	return func(m *Migrator) error {
-		m.ctx = ctx
+	return func(x *Migrator) error {
+		x.ctx = ctx
 		return nil
 	}
 }
@@ -345,8 +339,8 @@ func WithContext(ctx context.Context) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithTemplateDir(path string) MigratorOpt {
-	return func(m *Migrator) error {
-		m.templateDir = path
+	return func(x *Migrator) error {
+		x.templateDir = path
 		return nil
 	}
 }
@@ -357,8 +351,8 @@ func WithTemplateDir(path string) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithMigrationDir(path string) MigratorOpt {
-	return func(m *Migrator) error {
-		m.migrationDir = path
+	return func(x *Migrator) error {
+		x.migrationDir = path
 		return nil
 	}
 }
@@ -370,11 +364,13 @@ func WithMigrationDir(path string) MigratorOpt {
 //
 // Intended for use with NewMigrator.
 func WithPostgresFlavour(flavour PostgresFlavour) MigratorOpt {
-	return func(m *Migrator) error {
-		m.context.Flavour = flavour
+	return func(x *Migrator) error {
+		x.context.Flavour = flavour
 		return nil
 	}
 }
+
+// --- Migrator struct methods ---
 
 // Register adds a migration to the list of known migrations.
 //
@@ -385,26 +381,27 @@ func WithPostgresFlavour(flavour PostgresFlavour) MigratorOpt {
 //
 //	func(*pg.Tx) error
 //	func(*pg.Tx, *Context) error
-func (m *Migrator) Register(
+func (x *Migrator) Register(
 	name string,
 	up interface{},
 	down interface{},
 ) error {
-	return m.registry.Register(name, up, down)
+	return x.registry.Register(name, up, down)
 }
 
 // logWithMinVerbosity will log the provided format string if
 // a verbosity threshold is met.
 //
 // Quiet level is considered negative verbosity.
-func (m *Migrator) logWithMinVerbosity(requiredVerbosity int, format string, v ...any) {
-	currentVerbosity := m.verbosity
+func (x *Migrator) logWithMinVerbosity(requiredVerbosity int, format string, v ...any) {
+	currentVerbosity := x.verbosity
 	if currentVerbosity >= requiredVerbosity {
-		m.logger.Printf(format, v...)
+		x.logger.Printf(format, v...)
 	}
 }
 
-func (m *Migrator) ensureMigrationTable(db pg.DBI) error {
+// ensureMigrationTable will ensure initial migration table exists
+func (x *Migrator) ensureMigrationTable(db pg.DBI) error {
 	_, err := db.Exec(
 		`
 			CREATE TABLE IF NOT EXISTS ? (
@@ -414,486 +411,48 @@ func (m *Migrator) ensureMigrationTable(db pg.DBI) error {
 				migration_time timestamptz
 			)
 		`,
-		pg.Ident(m.migrationTableName),
+		pg.Ident(x.migrationTableName),
 	)
 	return err
 }
 
-func (m *Migrator) insertCompletedMigration(db pg.DBI, name string, batch int) error {
-	_, err := db.Exec(
-		"insert into ? (name, batch, migration_time) values (?, ?, now())",
-		pg.Ident(m.migrationTableName),
-		name,
-		batch,
-	)
-
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *Migrator) getCompletedMigrations(db pg.DBI) ([]string, error) {
-	var results []string
-
-	_, err := db.Query(&results, "select name from ?", pg.Ident(m.migrationTableName))
-	if err != nil {
-		return nil, err
-	}
-
-	return results, nil
-}
-
-func (m *Migrator) getMigrationsToRun(db pg.DBI) ([]string, error) {
-	var completedMigrations []string
-
-	completedMigrations, err := m.getCompletedMigrations(db)
-	if err != nil {
-		return nil, err
-	}
-
-	missingMigrations, _, migrationsToRun := difference(completedMigrations, m.registry.List())
-	if len(missingMigrations) > 0 {
-		return nil, errors.Wrapf(ErrMigrationNotKnown, "unknown migrations: %+v", missingMigrations)
-	}
-	if len(migrationsToRun) > 0 {
-		sort.Strings(migrationsToRun)
-	}
-
-	return migrationsToRun, nil
-}
-
 // maybeLockTable will try to lock the table if explicit locking is
 // enabled. If not, this does nothing.
-func (m *Migrator) maybeLockTable(tx *pg.Tx) error {
-	if !m.explicitLock {
+func (x *Migrator) maybeLockTable(tx *pg.Tx) error {
+	if !x.explicitLock {
 		return nil
 	}
 
 	// https://www.postgresql.org/docs/current/explicit-locking.html
 	// This mode protects a table against concurrent data changes, and is self-exclusive so that only one session can hold it at a time.
-	// This means only one migration can run at a time, but pg_dump can still COPY from the table (since it acquires a ACCESS SHARE lock, or so I am told)
+	// This means only one migration can run at a time, but pg_dump can still COPY from the table (since it acquires a ACCESS SHARE lock)
 	_, err := tx.Exec(
 		"LOCK ? in SHARE ROW EXCLUSIVE MODE",
-		pg.Ident(m.migrationTableName),
+		pg.Ident(x.migrationTableName),
 	)
 	return err
 }
 
-func (m *Migrator) getBatchNumber(db pg.DBI) (int, error) {
-	var result int
-	_, err := db.Query(
-		pg.Scan(&result),
-		"select max(batch) from ?",
-		pg.Ident(m.migrationTableName),
-	)
-	if err != nil {
-		return 0, err
-	}
-
-	return result, nil
-}
-
-// Init runs the initial migration against the configured DB. Attempting to
-// run this without registering the initial migration is an error.
-func (m *Migrator) Init() error {
-	db := m.dbFactory()
-	return db.RunInTransaction(
-		m.ctx,
-		func(tx *pg.Tx) (err error) {
-			err = m.ensureMigrationTable(tx)
-			if err != nil {
-				return
-			}
-
-			err = m.maybeLockTable(tx)
-			if err != nil {
-				return
-			}
-
-			batch, err := m.getBatchNumber(tx)
-			if err != nil {
-				return err
-			}
-
-			batch++
-
-			m.logWithMinVerbosity(0, "Batch %d run: %d migrations\n", batch, 1)
-			migrationName := m.initialMigration
-			migration, ok := m.registry.Get(migrationName)
-			if !ok {
-				err = errors.Wrap(ErrInitialMigrationNotKnown, "not found")
-				return err
-			}
-
-			switch migrationFunc := migration.Up.(type) {
-			case func(*pg.Tx) error:
-				err = migrationFunc(tx)
-			case func(*pg.Tx, *Context) error:
-				err = migrationFunc(tx, &m.context)
-			default:
-				err = errors.Wrapf(
-					ErrInvalidMigrationFuncRun,
-					"invalid migration function %T",
-					migrationFunc,
-				)
-			}
-			if err != nil {
-				err = errors.Wrapf(err, "%s failed to migrate", migrationName)
-				return err
-			}
-
-			err = m.insertCompletedMigration(tx, migrationName, batch)
-			if err != nil {
-				return err
-			}
-
-			return nil
-		},
-	)
-}
-
-// MigrateStepByStep runs any migrations against the DB which have not been
-// run yet. Each migration is run in its own transaction and marked as
-// belonging to a separate batch.
-func (m *Migrator) MigrateStepByStep() error {
-	db := m.dbFactory()
-	var migrationsToRun []string
-	err := db.RunInTransaction(
-		m.ctx,
-		func(tx *pg.Tx) (err error) {
-			err = m.ensureMigrationTable(tx)
-			if err != nil {
-				return
-			}
-
-			err = m.maybeLockTable(tx)
-			if err != nil {
-				return err
-			}
-
-			migrationsToRun, err = m.getMigrationsToRun(tx)
-			return err
-		},
-	)
-
-	if err != nil {
-		return err
-	}
-
-	if len(migrationsToRun) == 0 {
-		return nil
-	}
-
-	for _, migrationName := range migrationsToRun {
-		err := db.RunInTransaction(
-			m.ctx,
-			func(tx *pg.Tx) (err error) {
-				err = m.maybeLockTable(tx)
-				if err != nil {
-					return err
-				}
-
-				batch, err := m.getBatchNumber(tx)
-				if err != nil {
-					return err
-				}
-
-				batch++
-
-				m.logWithMinVerbosity(0, "Batch %d run: 1 migration - %s\n", batch, migrationName)
-				migration, exists := m.registry.Get(migrationName)
-				if !exists {
-					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
-				}
-
-				switch migrationFunc := migration.Up.(type) {
-				case func(*pg.Tx) error:
-					err = migrationFunc(tx)
-				case func(*pg.Tx, *Context) error:
-					err = migrationFunc(tx, &m.context)
-				default:
-					err = errors.Wrapf(
-						ErrInvalidMigrationFuncRun,
-						"invalid migration function %T",
-						migrationFunc,
-					)
-				}
-				if err != nil {
-					err = errors.Wrapf(err, "%s failed to migrate", migrationName)
-					return err
-				}
-
-				err = m.insertCompletedMigration(tx, migrationName, batch)
-				return err
-			},
-		)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
-// MigrateStepByStep runs any migrations against the DB which have not been
-// run yet. All migrations are run in a single migration and marked as
-// belonging to the same batch.
-func (m *Migrator) MigrateBatch() error {
-	db := m.dbFactory()
-	return db.RunInTransaction(
-		m.ctx,
-		func(tx *pg.Tx) (err error) {
-			err = m.ensureMigrationTable(tx)
-			if err != nil {
-				return
-			}
-
-			err = m.maybeLockTable(tx)
-			if err != nil {
-				return err
-			}
-
-			migrationsToRun, err := m.getMigrationsToRun(tx)
-			if err != nil {
-				return err
-			}
-
-			if len(migrationsToRun) == 0 {
-				return nil
-			}
-
-			batch, err := m.getBatchNumber(tx)
-			if err != nil {
-				return err
-			}
-
-			batch++
-
-			m.logWithMinVerbosity(0, "Batch %d run: %d migrations\n", batch, len(migrationsToRun))
-			for _, migrationName := range migrationsToRun {
-				migration, exists := m.registry.Get(migrationName)
-				if !exists {
-					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
-				}
-
-				switch migrationFunc := migration.Up.(type) {
-				case func(*pg.Tx) error:
-					err = migrationFunc(tx)
-				case func(*pg.Tx, *Context) error:
-					err = migrationFunc(tx, &m.context)
-				default:
-					err = errors.Wrapf(
-						ErrInvalidMigrationFuncRun,
-						"invalid migration function %T",
-						migrationFunc,
-					)
-				}
-				if err != nil {
-					err = errors.Wrapf(err, "%s failed to migrate", migrationName)
-					return err
-				}
-
-				err = m.insertCompletedMigration(tx, migrationName, batch)
-				if err != nil {
-					return err
-				}
-			}
-
-			return err
-		},
-	)
-}
-
-func (m *Migrator) removeRolledbackMigration(db pg.DBI, name string) error {
-	m.logWithMinVerbosity(0, "Rolled back %s\n", name)
-	_, err := db.Exec("delete from ? where name = ?", pg.Ident(m.migrationTableName), name)
-	if err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *Migrator) getMigrationsInBatch(db pg.DBI, batch int) ([]string, error) {
-	var results []string
-	_, err := db.Query(
-		&results,
-		"select name from ? where batch = ? order by id desc",
-		pg.Ident(m.migrationTableName),
+// insertCompletedMigration inserts migration at migrations table
+// to keep track of migrations.
+func (x *Migrator) insertCompletedMigration(db pg.DBI, name string, batch int) error {
+	_, err := db.Exec(
+		"insert into ? (name, batch, migration_time) values (?, ?, now())",
+		pg.Ident(x.migrationTableName),
+		name,
 		batch,
 	)
+	return err
+}
+
+// getCompletedMigrations returns list of all completed migrations
+func (x *Migrator) getCompletedMigrations(db pg.DBI) ([]string, error) {
+	var results []string
+	_, err := db.Query(&results, "select name from ?", pg.Ident(x.migrationTableName))
 	if err != nil {
 		return nil, err
 	}
-
 	return results, nil
-}
-
-// Rollback rolls back all migrations in the most recent batch.
-// If the most recent group of migrations was run with MigrateStepByStep,
-// this will only roll back the most recent migration.
-func (m *Migrator) Rollback() error {
-	db := m.dbFactory()
-	return db.RunInTransaction(
-		m.ctx,
-		func(tx *pg.Tx) (err error) {
-			err = m.ensureMigrationTable(tx)
-			if err != nil {
-				return
-			}
-
-			err = m.maybeLockTable(tx)
-			if err != nil {
-				return err
-			}
-
-			completedMigrations, err := m.getCompletedMigrations(tx)
-			if err != nil {
-				return err
-			}
-
-			missingMigrations, _, _ := difference(completedMigrations, m.registry.List())
-			if len(missingMigrations) > 0 {
-				return errors.Wrapf(ErrMigrationNotKnown, "unknown migrations: %+v", missingMigrations)
-			}
-
-			batch, err := m.getBatchNumber(tx)
-			if err != nil {
-				return err
-			}
-
-			migrationsToRun, err := m.getMigrationsInBatch(tx, batch)
-			if err != nil {
-				return err
-			}
-
-			if len(migrationsToRun) == 0 {
-				return nil
-			}
-
-			sort.Strings(migrationsToRun)
-			m.logWithMinVerbosity(0, "Batch %d rollback: %d migrations\n", batch, len(migrationsToRun))
-			for _, migrationName := range migrationsToRun {
-				migration, exists := m.registry.Get(migrationName)
-				if !exists {
-					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
-				}
-
-				switch migrationFunc := migration.Down.(type) {
-				case func(*pg.Tx) error:
-					err = migrationFunc(tx)
-				case func(*pg.Tx, *Context) error:
-					err = migrationFunc(tx, &m.context)
-				default:
-					err = errors.Wrapf(
-						ErrInvalidMigrationFuncRun,
-						"invalid migration function %T",
-						migrationFunc,
-					)
-				}
-				if err != nil {
-					err = errors.Wrapf(err, "%s failed to rollback", migrationName)
-					return err
-				}
-
-				err = m.removeRolledbackMigration(tx, migrationName)
-				if err != nil {
-					return err
-				}
-			}
-			return nil
-		},
-	)
-}
-
-// Create renders the default migration template to the configured migration
-// directory.
-func (m *Migrator) Create(description string) error {
-	caser, err := GetCaser(m.migrationNameConvention)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	filename := caser.ToFileCase(now, description)
-	funcName := caser.ToFuncCase(now, description)
-	filePath, err := m.createMigrationFile(
-		filename,
-		funcName,
-		DefaultMigrationTemplate,
-	)
-	if err != nil {
-		return err
-	}
-
-	m.logWithMinVerbosity(0, "Created migration %s", filePath)
-	return nil
-}
-
-// CreateFromTemplate renders a migration template to the configured migration
-// directory.
-func (m *Migrator) CreateFromTemplate(description string, template string) error {
-	caser, err := GetCaser(m.migrationNameConvention)
-	if err != nil {
-		return err
-	}
-
-	now := time.Now()
-	filename := caser.ToFileCase(now, description)
-	funcName := caser.ToFuncCase(now, description)
-	filePath, err := m.createMigrationFile(
-		filename,
-		funcName,
-		template,
-	)
-	if err != nil {
-		return err
-	}
-
-	m.logWithMinVerbosity(0, "Created migration %s", filePath)
-	return nil
-}
-
-func (m *Migrator) createMigrationFile(filename, funcName, templateString string) (string, error) {
-	var err error
-	filePath := path.Join(m.migrationDir, filename+".go")
-
-	_, err = os.Stat(filePath)
-	if !os.IsNotExist(err) {
-		err := errors.Wrapf(
-			ErrFileAlreadyExists,
-			"file %s (%v)",
-			filename,
-			err,
-		)
-		return "", err
-	}
-
-	if len(templateString) == 0 {
-		templateString = DefaultMigrationTemplate
-	}
-
-	data := map[string]interface{}{
-		"Filename": filename,
-		"FuncName": funcName,
-	}
-
-	t := template.Must(template.New("template").Parse(templateString))
-
-	buf := &bytes.Buffer{}
-	if err := t.Execute(buf, data); err != nil {
-		return "", errors.Wrap(err, "failed to render template")
-	}
-
-	templateString = buf.String()
-
-	err = os.WriteFile(filePath, []byte(templateString), 0644)
-	if err != nil {
-		return "", errors.Wrap(err, "could not write file")
-	}
-	return filePath, nil
 }
 
 // difference returns the sets of:
@@ -940,4 +499,436 @@ func difference(
 		}
 	}
 	return aNotB, unionAB, bNotA
+}
+
+// getMigrationsToRun returns list of new migrations to run by migrator
+func (x *Migrator) getMigrationsToRun(db pg.DBI) ([]string, error) {
+	var completedMigrations []string
+
+	completedMigrations, err := x.getCompletedMigrations(db)
+	if err != nil {
+		return nil, err
+	}
+
+	missingMigrations, _, migrationsToRun := difference(completedMigrations, x.registry.List())
+	if len(missingMigrations) > 0 {
+		return nil, errors.Wrapf(ErrMigrationNotKnown, "unknown migrations: %+v", missingMigrations)
+	}
+	if len(migrationsToRun) > 0 {
+		sort.Strings(migrationsToRun)
+	}
+
+	return migrationsToRun, nil
+}
+
+// getBatchNumber returns latest batch number of migration
+func (x *Migrator) getBatchNumber(db pg.DBI) (int, error) {
+	var result int
+	_, err := db.Query(
+		pg.Scan(&result),
+		"select max(batch) from ?",
+		pg.Ident(x.migrationTableName),
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return result, nil
+}
+
+// Init runs the initial migration against the configured DB. Attempting to
+// run this without registering the initial migration is an error.
+func (x *Migrator) Init() error {
+	db := x.dbFactory()
+	return db.RunInTransaction(
+		x.ctx,
+		func(tx *pg.Tx) (err error) {
+			err = x.ensureMigrationTable(tx)
+			if err != nil {
+				return
+			}
+
+			err = x.maybeLockTable(tx)
+			if err != nil {
+				return
+			}
+
+			batch, err := x.getBatchNumber(tx)
+			if err != nil {
+				return err
+			}
+
+			batch++
+
+			x.logWithMinVerbosity(0, "Batch %d run: %d migrations\n", batch, 1)
+			migrationName := x.initialMigration
+			migration, ok := x.registry.Get(migrationName)
+			if !ok {
+				err = errors.Wrap(ErrInitialMigrationNotKnown, "not found")
+				return err
+			}
+
+			switch migrationFunc := migration.Up.(type) {
+			case func(*pg.Tx) error:
+				err = migrationFunc(tx)
+			case func(*pg.Tx, *Context) error:
+				err = migrationFunc(tx, &x.context)
+			default:
+				err = errors.Wrapf(
+					ErrInvalidMigrationFuncRun,
+					"invalid migration function %T",
+					migrationFunc,
+				)
+			}
+			if err != nil {
+				err = errors.Wrapf(err, "%s failed to migrate", migrationName)
+				return err
+			}
+
+			err = x.insertCompletedMigration(tx, migrationName, batch)
+			if err != nil {
+				return err
+			}
+
+			return nil
+		},
+	)
+}
+
+// MigrateStepByStep runs any migrations against the DB which have not been
+// run yet. Each migration is run in its own transaction and marked as
+// belonging to a separate batch.
+func (x *Migrator) MigrateStepByStep() error {
+	db := x.dbFactory()
+	var migrationsToRun []string
+	err := db.RunInTransaction(
+		x.ctx,
+		func(tx *pg.Tx) (err error) {
+			err = x.ensureMigrationTable(tx)
+			if err != nil {
+				return
+			}
+
+			err = x.maybeLockTable(tx)
+			if err != nil {
+				return err
+			}
+
+			migrationsToRun, err = x.getMigrationsToRun(tx)
+			return err
+		},
+	)
+
+	if err != nil {
+		return err
+	}
+
+	if len(migrationsToRun) == 0 {
+		return nil
+	}
+
+	for _, migrationName := range migrationsToRun {
+		err := db.RunInTransaction(
+			x.ctx,
+			func(tx *pg.Tx) (err error) {
+				err = x.maybeLockTable(tx)
+				if err != nil {
+					return err
+				}
+
+				batch, err := x.getBatchNumber(tx)
+				if err != nil {
+					return err
+				}
+
+				batch++
+
+				x.logWithMinVerbosity(0, "Batch %d run: 1 migration - %s\n", batch, migrationName)
+				migration, exists := x.registry.Get(migrationName)
+				if !exists {
+					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
+				}
+
+				switch migrationFunc := migration.Up.(type) {
+				case func(*pg.Tx) error:
+					err = migrationFunc(tx)
+				case func(*pg.Tx, *Context) error:
+					err = migrationFunc(tx, &x.context)
+				default:
+					err = errors.Wrapf(
+						ErrInvalidMigrationFuncRun,
+						"invalid migration function %T",
+						migrationFunc,
+					)
+				}
+				if err != nil {
+					err = errors.Wrapf(err, "%s failed to migrate", migrationName)
+					return err
+				}
+
+				err = x.insertCompletedMigration(tx, migrationName, batch)
+				return err
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// MigrateBatch runs any migrations against the DB which have not been
+// run yet. All migrations are run in a single migration and marked as
+// belonging to the same batch.
+func (x *Migrator) MigrateBatch() error {
+	db := x.dbFactory()
+	return db.RunInTransaction(
+		x.ctx,
+		func(tx *pg.Tx) (err error) {
+			err = x.ensureMigrationTable(tx)
+			if err != nil {
+				return
+			}
+
+			err = x.maybeLockTable(tx)
+			if err != nil {
+				return err
+			}
+
+			migrationsToRun, err := x.getMigrationsToRun(tx)
+			if err != nil {
+				return err
+			}
+
+			if len(migrationsToRun) == 0 {
+				return nil
+			}
+
+			batch, err := x.getBatchNumber(tx)
+			if err != nil {
+				return err
+			}
+
+			batch++
+
+			x.logWithMinVerbosity(0, "Batch %d run: %d migrations\n", batch, len(migrationsToRun))
+			for _, migrationName := range migrationsToRun {
+				migration, exists := x.registry.Get(migrationName)
+				if !exists {
+					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
+				}
+
+				switch migrationFunc := migration.Up.(type) {
+				case func(*pg.Tx) error:
+					err = migrationFunc(tx)
+				case func(*pg.Tx, *Context) error:
+					err = migrationFunc(tx, &x.context)
+				default:
+					err = errors.Wrapf(
+						ErrInvalidMigrationFuncRun,
+						"invalid migration function %T",
+						migrationFunc,
+					)
+				}
+				if err != nil {
+					err = errors.Wrapf(err, "%s failed to migrate", migrationName)
+					return err
+				}
+
+				err = x.insertCompletedMigration(tx, migrationName, batch)
+				if err != nil {
+					return err
+				}
+			}
+
+			return err
+		},
+	)
+}
+
+func (x *Migrator) removeRolledbackMigration(db pg.DBI, name string) error {
+	x.logWithMinVerbosity(0, "Rolled back %s\n", name)
+	_, err := db.Exec("delete from ? where name = ?", pg.Ident(x.migrationTableName), name)
+	return err
+}
+
+func (x *Migrator) getMigrationsInBatch(db pg.DBI, batch int) ([]string, error) {
+	var results []string
+	_, err := db.Query(
+		&results,
+		"select name from ? where batch = ? order by id desc",
+		pg.Ident(x.migrationTableName),
+		batch,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	return results, nil
+}
+
+// Rollback rolls back all migrations in the most recent batch.
+// If the most recent group of migrations was run with MigrateStepByStep,
+// this will only roll back the most recent migration.
+func (x *Migrator) Rollback() error {
+	db := x.dbFactory()
+	return db.RunInTransaction(
+		x.ctx,
+		func(tx *pg.Tx) (err error) {
+			err = x.ensureMigrationTable(tx)
+			if err != nil {
+				return
+			}
+
+			err = x.maybeLockTable(tx)
+			if err != nil {
+				return err
+			}
+
+			completedMigrations, err := x.getCompletedMigrations(tx)
+			if err != nil {
+				return err
+			}
+
+			missingMigrations, _, _ := difference(completedMigrations, x.registry.List())
+			if len(missingMigrations) > 0 {
+				return errors.Wrapf(ErrMigrationNotKnown, "unknown migrations: %+v", missingMigrations)
+			}
+
+			batch, err := x.getBatchNumber(tx)
+			if err != nil {
+				return err
+			}
+
+			migrationsToRun, err := x.getMigrationsInBatch(tx, batch)
+			if err != nil {
+				return err
+			}
+
+			if len(migrationsToRun) == 0 {
+				return nil
+			}
+
+			sort.Strings(migrationsToRun)
+			x.logWithMinVerbosity(0, "Batch %d rollback: %d migrations\n", batch, len(migrationsToRun))
+			for _, migrationName := range migrationsToRun {
+				migration, exists := x.registry.Get(migrationName)
+				if !exists {
+					return errors.Wrapf(ErrMigrationNotKnown, "migration %s", migrationName)
+				}
+
+				switch migrationFunc := migration.Down.(type) {
+				case func(*pg.Tx) error:
+					err = migrationFunc(tx)
+				case func(*pg.Tx, *Context) error:
+					err = migrationFunc(tx, &x.context)
+				default:
+					err = errors.Wrapf(
+						ErrInvalidMigrationFuncRun,
+						"invalid migration function %T",
+						migrationFunc,
+					)
+				}
+				if err != nil {
+					err = errors.Wrapf(err, "%s failed to rollback", migrationName)
+					return err
+				}
+
+				err = x.removeRolledbackMigration(tx, migrationName)
+				if err != nil {
+					return err
+				}
+			}
+			return nil
+		},
+	)
+}
+
+// Create renders the default migration template to the configured migration
+// directory.
+func (x *Migrator) Create(description string) error {
+	caser, err := GetCaser(x.migrationNameConvention)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	filename := caser.ToFileCase(now, description)
+	funcName := caser.ToFuncCase(now, description)
+	filePath, err := x.createMigrationFile(
+		filename,
+		funcName,
+		DefaultMigrationTemplate,
+	)
+	if err != nil {
+		return err
+	}
+
+	x.logWithMinVerbosity(0, "Created migration %s", filePath)
+	return nil
+}
+
+func (x *Migrator) createMigrationFile(filename, funcName, templateString string) (string, error) {
+	var err error
+	filePath := path.Join(x.migrationDir, filename+".go")
+
+	_, err = os.Stat(filePath)
+	if !os.IsNotExist(err) {
+		err := errors.Wrapf(
+			ErrFileAlreadyExists,
+			"file %s (%v)",
+			filename,
+			err,
+		)
+		return "", err
+	}
+
+	if len(templateString) == 0 {
+		templateString = DefaultMigrationTemplate
+	}
+
+	data := map[string]interface{}{
+		"Filename": filename,
+		"FuncName": funcName,
+	}
+
+	t := template.Must(template.New("template").Parse(templateString))
+
+	buf := &bytes.Buffer{}
+	if err := t.Execute(buf, data); err != nil {
+		return "", errors.Wrap(err, "failed to render template")
+	}
+
+	templateString = buf.String()
+
+	err = os.WriteFile(filePath, []byte(templateString), 0644)
+	if err != nil {
+		return "", errors.Wrap(err, "could not write file")
+	}
+	return filePath, nil
+}
+
+// CreateFromTemplate renders a migration template to the configured migration
+// directory.
+func (x *Migrator) CreateFromTemplate(description string, template string) error {
+	caser, err := GetCaser(x.migrationNameConvention)
+	if err != nil {
+		return err
+	}
+
+	now := time.Now()
+	filename := caser.ToFileCase(now, description)
+	funcName := caser.ToFuncCase(now, description)
+	filePath, err := x.createMigrationFile(
+		filename,
+		funcName,
+		template,
+	)
+	if err != nil {
+		return err
+	}
+
+	x.logWithMinVerbosity(0, "Created migration %s", filePath)
+	return nil
 }

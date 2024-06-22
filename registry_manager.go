@@ -37,6 +37,7 @@ const (
 	CockroachDB
 )
 
+
 // Context contains some additional information which may be useful for
 // migration functions.
 type Context struct {
@@ -59,6 +60,47 @@ type Registry struct {
 	migrationNames []string
 }
 
+// Register adds a migration to the list of known migrations.
+//
+// If a migration by the given name is already known, this will
+// return ErrMigrationAlreadyExists.
+//
+// Valid function signatures for migration functions are:
+//
+//	func(*pg.Tx) error
+//	func(*pg.Tx, *Context) error
+func (x *Registry) Register(name string, up interface{}, down interface{}) error {
+	var err error
+	x.mtx.Lock()
+	defer x.mtx.Unlock()
+
+	if x.allMigrations == nil {
+		x.allMigrations = make(map[string]migration)
+	}
+
+	err = checkAllowedMigrationFunctions(up)
+	if err != nil {
+		return errors.Wrap(err, "invalid up migration")
+	}
+
+	err = checkAllowedMigrationFunctions(down)
+	if err != nil {
+		return errors.Wrap(err, "invalid down migration")
+	}
+
+	if _, exists := x.allMigrations[name]; exists {
+		return errors.Wrapf(ErrMigrationAlreadyExists, "migrations %s", name)
+	}
+	x.migrationNames = append(x.migrationNames, name)
+	x.allMigrations[name] = migration{
+		Name: name,
+		Up:   up,
+		Down: down,
+	}
+	return nil
+}
+
+// Checks if supplied migrate function is allowed or not
 func checkAllowedMigrationFunctions(fn interface{}) error {
 	if fn == nil {
 		return ErrNullMigrationFunc
@@ -78,63 +120,19 @@ func checkAllowedMigrationFunctions(fn interface{}) error {
 	}
 }
 
-// Register adds a migration to the list of known migrations.
-//
-// If a migration by the given name is already known, this will
-// return ErrMigrationAlreadyExists.
-//
-// Valid function signatures for migration functions are:
-//
-//	func(*pg.Tx) error
-//	func(*pg.Tx, *Context) error
-func (r *Registry) Register(
-	name string,
-	up interface{},
-	down interface{},
-) error {
-	var err error
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
-
-	if r.allMigrations == nil {
-		r.allMigrations = make(map[string]migration)
-	}
-
-	err = checkAllowedMigrationFunctions(up)
-	if err != nil {
-		return errors.Wrap(err, "invalid up migration")
-	}
-
-	err = checkAllowedMigrationFunctions(down)
-	if err != nil {
-		return errors.Wrap(err, "invalid down migration")
-	}
-
-	if _, exists := r.allMigrations[name]; exists {
-		return errors.Wrapf(ErrMigrationAlreadyExists, "migration %s", name)
-	}
-	r.migrationNames = append(r.migrationNames, name)
-	r.allMigrations[name] = migration{
-		Name: name,
-		Up:   up,
-		Down: down,
-	}
-	return nil
-}
-
 // Get returns a migration with the given name and a bool
 // to indicate whether it has been registered.
 //
 // If no migration has been registered with the given name,
 // false will be returned.
-func (r *Registry) Get(name string) (migration, bool) {
-	r.mtx.RLock()
-	defer r.mtx.RUnlock()
-	if r.allMigrations == nil {
+func (x *Registry) Get(name string) (migration, bool) {
+	x.mtx.RLock()
+	defer x.mtx.RUnlock()
+	if x.allMigrations == nil {
 		return migration{}, false
 	}
 
-	m, exists := r.allMigrations[name]
+	m, exists := x.allMigrations[name]
 	return m, exists
 }
 
@@ -143,28 +141,43 @@ func (r *Registry) Get(name string) (migration, bool) {
 //
 // This is a shallow copy. It is fine to add or remove items in other,
 // as long as the items themselves are not modified after the copy.
-func (r *Registry) From(other *Registry) {
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
-	if r.allMigrations == nil {
-		r.allMigrations = make(map[string]migration)
+func (x *Registry) From(other *Registry) {
+	x.mtx.Lock()
+	defer x.mtx.Unlock()
+	if x.allMigrations == nil {
+		x.allMigrations = make(map[string]migration)
 	}
 
 	// The other registry also needs to be locked for the duration
 	// of the copy.
-	other.mtx.RLock()
-	defer other.mtx.RUnlock()
+	other.mtx.Lock()
+	defer other.mtx.Unlock()
 	if len(other.allMigrations) == 0 {
 		return
 	}
 
-	ensureCapacity(r, len(other.allMigrations))
-	r.migrationNames = other.migrationNames[:]
+	ensureCapacity(x, len(other.allMigrations))
+	x.migrationNames = other.migrationNames[:]
 	for name, migration := range other.allMigrations {
-		r.allMigrations[name] = migration
+		x.allMigrations[name] = migration
 	}
 
-	sort.Strings(r.migrationNames)
+	sort.Strings(x.migrationNames)
+}
+
+// Sort sorts migrations in the registry by name, lexicographically.
+func ensureCapacity(x *Registry, capacity int) {
+	if cap(x.migrationNames) < capacity {
+		tmp := make([]string, 0, capacity)
+		tmp = append(tmp, x.migrationNames...)
+		x.migrationNames = tmp
+	}
+
+	// There's no good way of getting the current capacity of a map,
+	// so we'll only try to specify it if the registry is empty.
+	if len(x.allMigrations) == 0 {
+		x.allMigrations = make(map[string]migration)
+	}
 }
 
 // List returns a slice of all registered migrations.
@@ -172,56 +185,41 @@ func (r *Registry) From(other *Registry) {
 // This is a shallow copy. It is fine to add or remove items in the
 // registry, as long as the items themselves are not modified after
 // the copy.
-func (r *Registry) List() []string {
-	r.mtx.RLock()
-	defer r.mtx.RUnlock()
-	if r.allMigrations == nil {
+func (x *Registry) List() []string {
+	x.mtx.RLock()
+	defer x.mtx.RUnlock()
+	if x.allMigrations == nil {
 		return []string{}
 	}
 
-	return r.migrationNames[:]
+	return x.migrationNames[:]
 }
 
 // Sort sorts migrations in the registry by name, lexicographically.
-func (r *Registry) Sort() {
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
-	if r.allMigrations == nil {
+func (x *Registry) Sort() {
+	x.mtx.Lock()
+	defer x.mtx.Unlock()
+	if x.allMigrations == nil {
 		return
 	}
 
-	sort.Strings(r.migrationNames)
+	sort.Strings(x.migrationNames)
 }
 
 // EnsureCapacity increases the underlying storage of the registry,
 // to reduce the chance of allocations when a known number of items
 // is being added to the registry.
-func (r *Registry) EnsureCapacity(capacity int) {
-	r.mtx.Lock()
-	defer r.mtx.Unlock()
+func (x *Registry) EnsureCapacity(capacity int) {
+	x.mtx.Lock()
+	defer x.mtx.Unlock()
 
-	ensureCapacity(r, capacity)
-}
-
-// Sort sorts migrations in the registry by name, lexicographically.
-func ensureCapacity(r *Registry, capacity int) {
-	if cap(r.migrationNames) < capacity {
-		tmp := make([]string, 0, capacity)
-		tmp = append(tmp, r.migrationNames...)
-		r.migrationNames = tmp
-	}
-
-	// There's no good way of getting the current capacity of a map,
-	// so we'll only try to specify it if the registry is empty.
-	if len(r.allMigrations) == 0 {
-		r.allMigrations = make(map[string]migration, capacity)
-	}
+	ensureCapacity(x, capacity)
 }
 
 // Count returns the number of migrations in the registry.
-func (r *Registry) Count() int {
-	r.mtx.RLock()
-	defer r.mtx.RUnlock()
+func (x *Registry) Count() int {
+	x.mtx.RLock()
+	defer x.mtx.RUnlock()
 
-	return len(r.allMigrations)
+	return len(x.allMigrations)
 }
