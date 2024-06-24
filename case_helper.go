@@ -1,6 +1,7 @@
 package migrations
 
 import (
+	"fmt"
 	"strings"
 	"time"
 	"unicode"
@@ -122,18 +123,8 @@ func (x SnakeCaser) ToFileCase(date time.Time, input string) string {
 	// Panicking here is acceptable, because builder.WriteString
 	// should only ever return an error when out of memory.
 	builder := strings.Builder{}
-	_, err := builder.WriteString(date.Format("20060102150405"))
-	if err != nil {
-		panic(err)
-	}
-
-	_, err = builder.WriteRune('_')
-	if err != nil {
-		panic(err)
-	}
-
-	description := ConvertCamelCaseToSnakeCase(input)
-	_, err = builder.WriteString(description)
+	description := ConvertCamelCaseToSnakeCase(fmt.Sprintf("%s %s", date.Format("20060102150405"), input))
+	_, err := builder.WriteString(description)
 	if err != nil {
 		panic(err)
 	}
@@ -144,12 +135,8 @@ func (x SnakeCaser) ToFuncCase(date time.Time, input string) string {
 	// Panicking here is acceptable, because builder.WriteString
 	// should only ever return an error when out of memory.
 	builder := strings.Builder{}
-	_, err := builder.WriteString(date.Format("20060102150405"))
-	if err != nil {
-		panic(err)
-	}
-	description := ConvertCamelCaseToSnakeCase(input)
-	_, err = builder.WriteString(description)
+	description := ConvertSnakeCaseToCamelCase(fmt.Sprintf("%s %s", date.Format("20060102150405"), input))
+	_, err := builder.WriteString(description)
 	if err != nil {
 		panic(err)
 	}
@@ -167,12 +154,8 @@ func (x CamelCaser) ToFileCase(date time.Time, input string) string {
 	// Panicking here is acceptable, because builder.WriteString
 	// should only ever return an error when out of memory.
 	builder := strings.Builder{}
-	_, err := builder.WriteString(date.Format("20060102150405"))
-	if err != nil {
-		panic(err)
-	}
-	description := ConvertSnakeCaseToCamelCase(input)
-	_, err = builder.WriteString(description)
+	description := ConvertSnakeCaseToCamelCase(fmt.Sprintf("%s %s", date.Format("20060102150405"), input))
+	_, err := builder.WriteString(description)
 	if err != nil {
 		panic(err)
 	}
@@ -183,12 +166,8 @@ func (x CamelCaser) ToFuncCase(date time.Time, input string) string {
 	// Panicking here is acceptable, because builder.WriteString
 	// should only ever return an error when out of memory.
 	builder := strings.Builder{}
-	_, err := builder.WriteString(date.Format("20060102150405"))
-	if err != nil {
-		panic(err)
-	}
-	description := ConvertSnakeCaseToCamelCase(input)
-	_, err = builder.WriteString(description)
+	description := ConvertSnakeCaseToCamelCase(fmt.Sprintf("%s %s", date.Format("20060102150405"), input))
+	_, err := builder.WriteString(description)
 	if err != nil {
 		panic(err)
 	}
