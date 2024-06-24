@@ -93,14 +93,12 @@ const (
 	}
 	
 	func up{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
-		var err error
-		_, err = tx.Exec(` + "`" + "`" + `)
+		_, err := tx.Exec(` + "`" + "`" + `)
 		return err
 	}
 	
 	func down{{.FuncName}}(tx *pg.Tx, cont *migrations.Context) error {
-		var err error
-		_, err = tx.Exec(` + "`" + "`" + `)
+		_, err := tx.Exec(` + "`" + "`" + `)
 		return err
 	}
 	`
