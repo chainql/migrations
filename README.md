@@ -200,3 +200,7 @@ func down20240622230738NewIndex(tx *pg.Tx, cont *migrations.Context) error {
 ```
 
 Forward migration sql commands go in up and Rollback migrations sql commands go in down
+
+## Credits
+
+This project was inspired by [hb_migrations](https://github.com/hbarnardt/hb_migrations) by hbarnardt, licensed under the MIT License.
