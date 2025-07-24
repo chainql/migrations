@@ -1,4 +1,4 @@
-module github.com/padm-io/migrations
+module github.com/chainql/migrations
 
 go 1.22.4
 
